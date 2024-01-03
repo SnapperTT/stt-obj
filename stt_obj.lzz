@@ -1,0 +1,471 @@
+// Basic .obj file loaded
+// By Liam Twigger (www.SnapperTheTwig.com), using sections adapted from thecplusplusguy's (http://www.youtube.com/user/thecplusplusguy) example.
+// Part 1 of his video tutorial: http://www.youtube.com/watch?v=849hXuOv0i8
+// Source code: http://pastebin.com/6Q7zS7tC
+// Use lazy-c++ to generate .cpp and .h files from this file
+
+#hdr
+// Override if you're not using std
+#ifndef WOBJ_VECTOR
+	#define WOBJ_VECTOR std::vector
+	#include <vector>
+#endif
+#ifndef WOBJ_STRING
+	#define WOBJ_STRING std::string
+	#include <string>
+#endif
+
+#ifdef WOBJ_OPENGL
+	#error NO_GL
+	#ifdef __APPLE__
+		#include <OpenGL/gl.h>
+	#else
+		#include <GL/gl.h>
+	#endif
+#endif
+#ifndef WOBJ_NO_BULLET
+	#define BT_USE_DOUBLE_PRECISION
+	#include <btBulletDynamicsCommon.h>
+#endif
+#ifndef WOBJ_NUM_POINTS_PER_FACE
+	#define WOBJ_NUM_POINTS_PER_FACE 5
+	// 3 points per face => sizeof(wobj_face) = 40
+	// 4 points per face => sizeof(wobj_face) = 52
+	// 5 points per face => sizeof(wobj_face) = 64
+#endif
+
+#include <cstdint>
+
+#end
+
+#src
+#include <fstream>
+#include <iostream> // for cout
+#include <cstdlib>
+#end
+// String serialisation/deserialisation functions
+
+template <typename T>
+union stringSerialiserBuffer {
+	/// Used to serialise T
+	T d;
+	char c[sizeof(T)];
+
+	stringSerialiserBuffer(const T & a) : d(a) {}
+	}
+
+template <typename T>
+WOBJ_STRING serialiseToString (T p) {
+	/// Writes an arbitary type T to a binary WOBJ_STRING
+	return WOBJ_STRING(stringSerialiserBuffer<T>(p).c,sizeof(T));
+	}
+
+template <typename T>
+T deserialiseFromString (const WOBJ_STRING & s, int start) {
+	/// Reads an arbitary type T from a binary WOBJ_STRING
+	stringSerialiserBuffer<T> q;
+	memcpy(q.c, s.data(), sizeof(T));
+	return q.d;
+	}
+
+WOBJ_VECTOR<WOBJ_STRING> splitString (const char *str, char c = ' ') {
+	/// Tokenises a WOBJ_STRING, returns it in a vector
+	WOBJ_VECTOR<WOBJ_STRING> result;
+
+    do {
+        const char *begin = str;
+
+        while(*str != c && *str)
+            str++;
+
+        result.push_back(WOBJ_STRING(begin, str));
+    } while (0 != *str++);
+
+    return result;
+	}
+
+struct WObj_Vector {
+	float x, y, z, w;
+	WObj_Vector () {}
+	WObj_Vector (const float & _x, const float & _y, const float & _z) : x(_x), y(_y), z(_z), w(0) {}
+	WObj_Vector (const float & _x, const float & _y, const float & _z, const float & _w) : x(_x), y(_y), z(_z), w(_w) {}
+	
+	inline float dot(const WObj_Vector&a) const { return x*a.x + y*a.y + z*a.z; }
+	inline WObj_Vector cross(const WObj_Vector&a) const { return WObj_Vector(y*a.z - z*a.y, z*a.x - x*a.z, x*a.y - y*a.x); }
+	inline WObj_Vector normalised() {
+		float l2 = x*x + y*y + z*z;
+		WObj_Vector r = *this;
+		if (l2 > 0) {
+			l2 = sqrt(l2);
+			r.x /= l2; r.y /= l2; r.z /= l2;
+			}
+		return r;
+		}
+	inline WObj_Vector operator*(const float f) const { return WObj_Vector(x*f, y*f, z*f); }
+	inline WObj_Vector operator+(const WObj_Vector & a) const { return WObj_Vector(x+a.x, y+a.y, z+a.z); }
+	inline WObj_Vector operator-(const WObj_Vector & a) const { return WObj_Vector(x-a.x, y-a.y, z-a.z); }
+	inline const float* toFv() const { return &x; }
+	inline float lengthSquared() const { return x*x + y*y + z*z; }
+
+	#ifndef WOBJ_NO_BULLET
+	WObj_Vector(const btVector3 & a) { x = a.x(); y = a.y(); z = a.z(); w = 0; }
+	inline operator btVector3 () const { return btVector3 (x, y, z); }
+	#endif
+	};
+
+struct WObj_TexCoord {
+	float u, v, w;
+	WObj_TexCoord (const float & _u, const float & _v) : u(_u), v(_v) { w = 0; }
+	WObj_TexCoord (const float & _u, const float & _v, const float & _w) : u(_u), v(_v), w(_w) {}
+
+
+	inline WObj_TexCoord operator+(const WObj_TexCoord & a) const { return WObj_TexCoord(u+a.u, v+a.v, w+a.w); }
+	inline WObj_TexCoord operator-(const WObj_TexCoord & a) const { return WObj_TexCoord(u-a.u, v-a.v, w-a.w); }
+	};
+
+struct WObj_Face {
+	//WOBJ_VECTOR<int>pointIndices;
+	//WOBJ_VECTOR<int>texIndices;
+	//WOBJ_VECTOR<int>normIndices;
+	// No vectors - reduce the amount of allocations
+	int pointIndices[WOBJ_NUM_POINTS_PER_FACE];
+	int texIndices[WOBJ_NUM_POINTS_PER_FACE];
+	int normIndices[WOBJ_NUM_POINTS_PER_FACE];
+	uint8_t numPoints;
+	uint8_t numTex;
+	uint8_t numNorms;
+	uint8_t _padding;
+	// Faces with more than WOBJ_NUM_POINTS_PER_FACE points are no longer supported
+	// Todo: fallback to vector, or perhaps a bigFace class
+	
+	inline WObj_Face() : numPoints(0), numTex(0), numNorms(0), _padding(0) {}
+	
+	void copyToAtIndex (WObj_Face & other, const int & index) const {
+		/// Copys a point in a face to another object ("other"). Useful for eg, spilitting a face into triangles.
+		other.pointIndices_push_back(pointIndices[index]);
+		other.texIndices_push_back(texIndices[index]);
+		other.normIndices_push_back(normIndices[index]);
+		}
+		
+	void applyOffset (const int offset) {
+		for (int i = 0; i < numPoints; ++i) {
+			pointIndices[i] += offset;
+			texIndices[i] += offset;
+			normIndices[i] += offset;
+			}
+		//for (int & pi : pointIndices)
+		//	pi += offset;
+		//for (int & pi : texIndices)
+		//	pi += offset;
+		//for (int & pi : normIndices)
+		//	pi += offset;
+		}
+		
+	inline void pointIndices_push_back(const int idx) {
+		if (numPoints >= WOBJ_NUM_POINTS_PER_FACE) abort();
+		pointIndices[numPoints] = idx;
+		numPoints++;
+		}
+	inline void texIndices_push_back(const int idx) {
+		if (numTex >= WOBJ_NUM_POINTS_PER_FACE) abort();
+		texIndices[numTex] = idx;
+		numTex++;
+		}
+	inline void normIndices_push_back(const int idx) {
+		if (numNorms >= WOBJ_NUM_POINTS_PER_FACE) abort();
+		normIndices[numNorms] = idx;
+		numNorms++;
+		}
+		
+	inline unsigned int pointIndices_size() const { return numPoints; }
+	inline unsigned int texIndices_size() const { return numTex; }
+	inline unsigned int normIndices_size() const { return numNorms; }
+	inline void pointIndices_clear() { numPoints = 0; }
+	inline void texIndices_clear() { numTex = 0; }
+	inline void normIndices_clear() { numNorms = 0; }
+		
+	inline unsigned int size () const { return numPoints; } // pointIndices_size(); }
+	};
+
+struct WObj_BoneInfo {
+	float boneWeights[4];
+	uint16_t boneIndices[4];
+	
+	inline WObj_BoneInfo(const WObj_BoneInfo& other) {
+		memcpy(this, &other, sizeof(WObj_BoneInfo));
+		}
+	inline WObj_BoneInfo& operator = (const WObj_BoneInfo&other) {
+		memcpy(this, &other, sizeof(WObj_BoneInfo));
+		return *this;
+		}
+	
+	inline WObj_BoneInfo () {
+		boneWeights[0] = 0.f;
+		boneWeights[1] = 0.f;
+		boneWeights[2] = 0.f;
+		boneWeights[3] = 0.f;
+		boneIndices[0] = 0;
+		boneIndices[1] = 0;
+		boneIndices[2] = 0;
+		boneIndices[3] = 0;
+		}
+	};
+
+class WObj_Object {
+public:
+	WOBJ_VECTOR<WObj_Vector>points;
+	WOBJ_VECTOR<WObj_TexCoord>texCoords;
+	WOBJ_VECTOR<WObj_Vector>normals;
+	WOBJ_VECTOR<WObj_Vector>tangents;
+	WOBJ_VECTOR<WObj_Face>faces;
+	WOBJ_VECTOR<WObj_BoneInfo>boneInfos;	// Bone info should line up with points (bones[7] belongs to points[7]). If bones.size() =/= points.size() then there are no bones
+	unsigned int nBones;
+
+	WObj_Object () : nBones(0) {}
+		
+	WObj_Object operator = (WObj_Object const & other) { // Copys
+		points = other.points;
+		texCoords = other.texCoords;
+		normals = other.normals;
+		tangents = other.tangents;
+		faces = other.faces;
+		boneInfos = other.boneInfos;
+		nBones = other.nBones;
+		return *this;
+		}
+	
+	void addPoint (const WObj_Vector & wv) { points.push_back (wv); }
+	void addTexCoord (const WObj_TexCoord & wv) { texCoords.push_back (wv); }
+	void addNormal (const WObj_Vector & wv) { normals.push_back (wv); }
+	void addTangent (const WObj_Vector & wv) { tangents.push_back (wv); }
+	void addFace (const WObj_Face & wv) { faces.push_back (wv); }
+	void addVertBoneInfo (const WObj_BoneInfo& bi) { boneInfos.push_back(bi); }
+	
+	void append (const WObj_Object & other) {
+		/// Adds WObj_Vector other onto this
+		const int pointOffset = points.size();
+		for (size_t i = 0; i < other.points.size(); ++i)
+			points.push_back(other.points[i]);	
+		for (size_t i = 0; i < other.texCoords.size(); ++i)
+			texCoords.push_back(other.texCoords[i]);	
+		for (size_t i = 0; i < other.normals.size(); ++i)
+			normals.push_back(other.normals[i]);	
+		for (size_t i = 0; i < other.faces.size(); ++i) {
+			WObj_Face fn = other.faces[i];
+			fn.applyOffset (pointOffset);
+			faces.push_back(fn);
+			}
+		for (size_t i = 0; i < other.boneInfos.size(); ++i) {
+			boneInfos.push_back(other.boneInfos[i]);	// should an index be applied here?
+			}
+		nBones = nBones > other.nBones ? nBones : other.nBones; //todo: max of combined boneInfos
+		}
+
+	void generateNormals() {
+		normals.resize(points.size());
+		
+		for (size_t i = 0; i < normals.size(); ++i)
+			normals[i] = WObj_Vector(0,0,0);
+			
+		for (size_t i = 0; i < faces.size(); ++i) {
+			WObj_Face& f = faces[i];
+			if (f.pointIndices_size() < 3) continue;
+			
+			int index0 = f.pointIndices[0];//-1;
+			int index1 = f.pointIndices[1];//-1;
+			int index2 = f.pointIndices[2];//-1;
+			
+			//if (index0 <= 0) continue;
+			//if (index1 <= 0) continue;
+			//if (index2 <= 0) continue;
+			
+			WObj_Vector a = points[index1] - points[index0];
+			WObj_Vector b = points[index2] - points[index0];
+			WObj_Vector n = b.cross(a).normalised();
+			
+			f.normIndices_clear();
+			for (size_t j = 0; j < f.pointIndices_size(); ++j) {
+				normals[f.pointIndices[j]] = n;
+				}
+			for (uint8_t j = 0; j < f.pointIndices_size(); ++j) {
+				f.normIndices[j] = f.pointIndices[j];
+				}
+			}
+		}
+
+	void generateTangents(const bool dontGenerateIfAlreadyGenerated) {
+		// Requires valid normals & texcoords!
+		if (dontGenerateIfAlreadyGenerated && tangents.size()) return;
+		tangents.resize(normals.size());
+		
+		for (size_t i = 0; i < tangents.size(); ++i)
+			tangents[i] = WObj_Vector(0,0,1);
+
+		for (size_t i = 0; i < faces.size(); ++i) {
+			WObj_Face& f = faces[i];
+			if (f.pointIndices_size() < 3) continue;
+			if (f.normIndices_size() < f.pointIndices_size()) { continue; } //std::cout << "SKIP 2" << std::endl; 
+			if (f.texIndices_size() < f.pointIndices_size()) { continue; } //std::cout << "SKIP 2" << std::endl; 
+			
+			int index0 = f.pointIndices[0];
+			int index1 = f.pointIndices[1];
+			int index2 = f.pointIndices[2];
+			int ti0 = f.texIndices[0];
+			int ti1 = f.texIndices[1];
+			int ti2 = f.texIndices[2];
+			
+			//if (index0 <= 0 || index1 <= 0 || index2 <= 0) continue;
+			
+			WObj_Vector N = normals[index0];
+			WObj_Vector a = points[index1] - points[index0];
+			WObj_Vector b = points[index2] - points[index0];
+			WObj_Vector tangent;
+			if (ti0 <= 0 && ti1 <= 0 && ti2 <= 0) {
+				tangent = N.cross(WObj_Vector(0,1,0));
+				}
+			else {
+				WObj_TexCoord uva = texCoords[ti1] - texCoords[ti0];
+				WObj_TexCoord uvb = texCoords[ti2] - texCoords[ti0];
+				
+				tangent = -(a*uvb.v - b*uva.v);
+				tangent = tangent.normalised();
+				
+				// orthonormalise
+				tangent = tangent - N * N.dot(tangent);
+				}
+				
+			for (size_t j = 0; j < f.normIndices_size(); ++j) {
+				tangents[f.normIndices[j]] = tangent;
+				}	
+			}
+
+		}
+
+	inline bool hasPoints () const {
+		return points.size() ? true : false;
+		}
+	inline bool hasBones () const {
+		return boneInfos.size() ? true : false;
+		}
+
+	void load (const WOBJ_STRING & filename) {
+		/// Loads the .obj file specified by filename
+		/// Example usage: Model.loadBinary("foo.obj");
+
+		std::ifstream f(filename.c_str());
+		if (!f.is_open())
+			return;
+
+		WOBJ_STRING line;
+		
+		
+		// Prevent out of range lookups on empty arrays by inserting a null elment
+		texCoords.push_back (WObj_TexCoord(0,0));
+		normals.push_back (WObj_Vector(0,0,0));
+		points.push_back (WObj_Vector(0,0,0));
+
+		while (!f.eof()) {
+			std::getline(f, line);
+			if (line.length() < 2)
+				continue;
+			if (line[0] == '#') // comment
+				continue;
+			else if (line[0]=='v' && line[1]==' ')	//if vector
+				{
+				float tmpx, tmpy, tmpz;
+				sscanf(line.c_str(),"v %f %f %f",&tmpx,&tmpy,&tmpz);	//read in the 3 float coordinate to tmpx,tmpy,tmpz
+				points.push_back(WObj_Vector(tmpx,tmpy,tmpz));	//and then add it to the end of our vertex list
+				}
+			else if (line[0]=='v' && line[1]=='n')	//if normal vector
+				{
+				float tmpx,tmpy,tmpz;	//do the same thing
+				sscanf(line.c_str(),"vn %f %f %f",&tmpx,&tmpy,&tmpz);
+				normals.push_back(WObj_Vector(tmpx,tmpy,tmpz));	
+				}
+			else if (line[0]=='v' && line[1]=='t')	//if texcoord
+				{
+				float tmpu,tmpv;	//do the same thing
+				sscanf(line.c_str(),"vt %f %f",&tmpu,&tmpv);
+				texCoords.push_back(WObj_TexCoord(tmpu,tmpv));	
+				}
+			else if (line[0]=='f')	//if face
+				{
+				// First tokenise into "a/c/b" groups, then analyse each group
+				WOBJ_VECTOR<WOBJ_STRING> verts = splitString (line.c_str(), ' ');
+				WObj_Face face;
+				for (size_t i = 1; i < verts.size (); ++i) { //i = 1 --> ignore the "f" part
+					WOBJ_VECTOR<WOBJ_STRING> params = splitString (verts[i].c_str(), '/');
+					
+					bool tex = false;
+					bool norm = false;
+					
+					for (size_t j = 0; j < params.size (); ++j) {
+						if (j == 0)
+							face.pointIndices_push_back(atoi(params[j].c_str()));
+						if (j == 1) {
+							face.texIndices_push_back(atoi(params[j].c_str()));
+							tex = true;
+							}
+						if (j == 2) {
+							face.normIndices_push_back(atoi(params[j].c_str()));
+							norm = true;
+							}
+						}
+					if (!norm)
+						face.normIndices_push_back(0);
+					if (!tex)
+						face.texIndices_push_back(0);
+					}
+				faces.push_back(face);
+				}
+			}
+
+		f.close();
+		}
+	void load (const char * filename) { load (WOBJ_STRING(filename)); }
+
+	void saveBinary (const WOBJ_STRING & filename) const {
+		/// Saves a binary version of the .obj (for faster loading)
+		}
+
+	void loadBinary (const WOBJ_STRING & filename) {
+		/// Loads the binary .obj file specified by filename. Only use on files generated with saveBinary ()
+		/// Example usage: Model.loadBinary("foo.obj");
+		}
+
+	void loadBinary (const char * filename) { loadBinary (WOBJ_STRING(filename)); }
+
+	void GL_WireframeDraw () const {
+		#ifdef WOBJ_OPENGL
+		/// Draws a wireframe model of the this object with GL_LINES
+		/// To compile without this function (and including gl.h), define WOBJ_NO_OPENGL
+		if (!faces.size())
+			return; // No faces defined!
+		glBegin (GL_LINES);
+		for (size_t i = 0; i < faces.size(); ++i) {
+			if (faces[i].pointIndices_size () < 2)
+				continue; // No points in the face
+			WObj_Vector a, b;
+			for (size_t j = 1; j < faces[i].pointIndices_size(); ++j) {
+				if (faces[i].pointIndices.at(j - 1) <= 0)
+					continue;
+				if (faces[i].pointIndices.at(j) <= 0)
+					continue;
+				a = points.at(faces[i].pointIndices.at(j - 1)-1);
+				b = points.at(faces[i].pointIndices.at(j)-1);
+				glVertex3f(a.x, a.y, a.z);
+				glVertex3f(b.x, b.y, b.z);
+				} 
+			if (faces[i].pointIndices.at(0) <= 0)
+				continue;
+			if (faces[i].pointIndices.at(faces[i].pointIndices_size()-1) <= 0)
+				continue;
+			a = points.at(faces[i].pointIndices.at(0)-1);
+			b = points.at(faces[i].pointIndices.at(faces[i].pointIndices_size()-1)-1);
+			glVertex3f(a.x, a.y, a.z);
+			glVertex3f(b.x, b.y, b.z);
+			}
+		glEnd ();
+		#endif
+		}
+	}
