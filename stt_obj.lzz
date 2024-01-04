@@ -47,7 +47,7 @@
 
 template <typename T>
 union stringSerialiserBuffer {
-	/// Used to serialise T
+	// Used to serialise T
 	T d;
 	char c[sizeof(T)];
 
@@ -56,20 +56,20 @@ union stringSerialiserBuffer {
 
 template <typename T>
 WOBJ_STRING serialiseToString (T p) {
-	/// Writes an arbitary type T to a binary WOBJ_STRING
+	// Writes an arbitary type T to a binary WOBJ_STRING
 	return WOBJ_STRING(stringSerialiserBuffer<T>(p).c,sizeof(T));
 	}
 
 template <typename T>
 T deserialiseFromString (const WOBJ_STRING & s, int start) {
-	/// Reads an arbitary type T from a binary WOBJ_STRING
+	// Reads an arbitary type T from a binary WOBJ_STRING
 	stringSerialiserBuffer<T> q;
 	memcpy(q.c, s.data(), sizeof(T));
 	return q.d;
 	}
 
 WOBJ_VECTOR<WOBJ_STRING> splitString (const char *str, char c = ' ') {
-	/// Tokenises a WOBJ_STRING, returns it in a vector
+	// Tokenises a WOBJ_STRING, returns it in a vector
 	WOBJ_VECTOR<WOBJ_STRING> result;
 
     do {
@@ -141,7 +141,7 @@ struct WObj_Face {
 	inline WObj_Face() : numPoints(0), numTex(0), numNorms(0), _padding(0) {}
 	
 	void copyToAtIndex (WObj_Face & other, const int & index) const {
-		/// Copys a point in a face to another object ("other"). Useful for eg, spilitting a face into triangles.
+		// Copys a point in a face to another object ("other"). Useful for eg, spilitting a face into triangles.
 		other.pointIndices_push_back(pointIndices[index]);
 		other.texIndices_push_back(texIndices[index]);
 		other.normIndices_push_back(normIndices[index]);
@@ -242,7 +242,7 @@ public:
 	void addVertBoneInfo (const WObj_BoneInfo& bi) { boneInfos.push_back(bi); }
 	
 	void append (const WObj_Object & other) {
-		/// Adds WObj_Vector other onto this
+		// Adds WObj_Vector other onto this
 		const int pointOffset = points.size();
 		for (size_t i = 0; i < other.points.size(); ++i)
 			points.push_back(other.points[i]);	
@@ -349,8 +349,8 @@ public:
 		}
 
 	void load (const WOBJ_STRING & filename) {
-		/// Loads the .obj file specified by filename
-		/// Example usage: Model.loadBinary("foo.obj");
+		// Loads the .obj file specified by filename
+		// Example usage: Model.loadBinary("foo.obj");
 
 		std::ifstream f(filename.c_str());
 		if (!f.is_open())
@@ -425,20 +425,23 @@ public:
 	void load (const char * filename) { load (WOBJ_STRING(filename)); }
 
 	void saveBinary (const WOBJ_STRING & filename) const {
-		/// Saves a binary version of the .obj (for faster loading)
+		// Saves a binary version of the .obj (for faster loading)
+		// not implmented
+		abort();
 		}
 
 	void loadBinary (const WOBJ_STRING & filename) {
-		/// Loads the binary .obj file specified by filename. Only use on files generated with saveBinary ()
-		/// Example usage: Model.loadBinary("foo.obj");
+		// Loads the binary .obj file specified by filename. Only use on files generated with saveBinary ()
+		// Example usage: Model.loadBinary("foo.obj");
+		// not implmented
 		}
 
 	void loadBinary (const char * filename) { loadBinary (WOBJ_STRING(filename)); }
 
 	void GL_WireframeDraw () const {
 		#ifdef WOBJ_OPENGL
-		/// Draws a wireframe model of the this object with GL_LINES
-		/// To compile without this function (and including gl.h), define WOBJ_NO_OPENGL
+		// Draws a wireframe model of the this object with GL_LINES
+		// To compile without this function (and including gl.h), define WOBJ_NO_OPENGL
 		if (!faces.size())
 			return; // No faces defined!
 		glBegin (GL_LINES);
