@@ -192,10 +192,10 @@ struct WObj_BoneInfo {
 	uint16_t boneIndices[4];
 	
 	inline WObj_BoneInfo(const WObj_BoneInfo& other) {
-		memcpy(this, &other, sizeof(WObj_BoneInfo));
+		memcpy((void*) this, &other, sizeof(WObj_BoneInfo));
 		}
 	inline WObj_BoneInfo& operator = (const WObj_BoneInfo&other) {
-		memcpy(this, &other, sizeof(WObj_BoneInfo));
+		memcpy((void*) this, &other, sizeof(WObj_BoneInfo));
 		return *this;
 		}
 	
